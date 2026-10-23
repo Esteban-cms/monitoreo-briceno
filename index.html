@@ -89,6 +89,9 @@ section>.top h2::before{content:"";width:5px;height:22px;border-radius:3px;backg
 .kpis div::after{content:"";position:absolute;left:16px;top:0;width:28px;height:3px;background:var(--water)}
 footer{padding:0 clamp(16px,4vw,48px) 40px;color:var(--mute);font-size:12px;text-align:center}
 @media(max-width:860px){.hgrid{grid-template-columns:1fr}.big{font-size:52px}}
+.scrub{display:flex;align-items:center;gap:14px;max-width:820px;margin:8px auto 0}
+.scrub input[type=range]{flex:1;accent-color:var(--water)}
+.scrub .t{font-size:13px;color:var(--ink);min-width:170px;text-align:right;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -168,11 +171,12 @@ footer{padding:0 clamp(16px,4vw,48px) 40px;color:var(--mute);font-size:12px;text
     <div><div>Máxima sección del cauce del día</div><div id="diaTxt" class="sub"></div></div>
     <button id="next" aria-label="Día siguiente">›</button>
   </div>
+  <div class="scrub"><button class="btn" id="play" aria-label="Reproducir el día">▶ Reproducir</button><input type="range" id="slider" min="0" max="143" value="0" aria-label="Hora del día"><span class="t" id="sliderT"></span></div>
   <svg id="sec" viewBox="0 0 700 370" role="img" aria-label="Sección transversal del cauce"></svg>
   <div class="leg"><span><i style="background:var(--water)"></i>Nivel (cm)</span><span><i style="background:#12a150"></i>Nivel seguro</span><span><i style="background:#ffee00"></i>Alerta amarilla</span><span><i style="background:#ffb800"></i>Alerta naranja</span><span><i style="background:#ff1010"></i>Alerta roja</span></div>
   <h3 style="margin-top:22px">Nivel cada 10 minutos (haz clic para elegir el día)</h3>
   <div class="chart"><canvas id="cNivel"></canvas></div>
-  <p class="note">Datos crudos pendientes de validación.</p>
+  <p class="note">Pasa el mouse por la gráfica y la sección del cauce sigue el nivel de ese momento; haz clic para fijar el día. Datos crudos pendientes de validación.</p>
 </section>
 
 <section id="equipos">
@@ -209,6 +213,7 @@ const sum = a => nn(a).reduce((x,y)=>x+y,0);
 const avg = a => {const v=nn(a);return v.length?sum(v)/v.length:null};
 function estado(v){const u=CFG.umbrales;return v>=u.roja?['Alerta roja',COL.r,3]:v>=u.naranja?['Alerta naranja',COL.o,2]:v>=u.amarilla?['Alerta amarilla',COL.y,1]:['Nivel seguro',COL.g,0]}
 
+function stop(){if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Reproducir'}}
 let N, D, L, R = [], dias = [], sel = 0, grp = 'd', charts = {};
 function mk(id, cfg){ if(charts[id]) charts[id].destroy(); return charts[id]=new Chart($(id), cfg) }
 function base(extra={}){const m=css('--mute'),l=css('--line');return {maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},
@@ -222,7 +227,12 @@ function init(){
   $('desde').min=$('hasta').min=ini; $('desde').max=$('hasta').max=fin;
   const all=()=>{$('desde').value=ini;$('hasta').value=fin;update()};
   $('todo').onclick=all; $('desde').onchange=$('hasta').onchange=update;
-  $('prev').onclick=()=>{sel--;drawSec()}; $('next').onclick=()=>{sel++;drawSec()};
+  $('slider').oninput=applySlider;
+  $('play').onclick=()=>{ if(timer){stop();return}
+    $('play').textContent='⏸ Pausar';
+    timer=setInterval(()=>{const sl=$('slider'); if(+sl.value<+sl.max){sl.value=+sl.value+1;applySlider()}
+      else if(sel<dias.length-1){sel++;drawSec();$('slider').value=0;applySlider()} else stop()},60)};
+  $('prev').onclick=()=>{stop();sel--;drawSec()}; $('next').onclick=()=>{stop();sel++;drawSec()};
   document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.seg button').forEach(x=>x.setAttribute('aria-pressed',x===b));grp=b.dataset.g;drawRain()});
   matchMedia('(prefers-color-scheme:dark)').onchange=update;
   hero(); all();
@@ -349,12 +359,25 @@ function salud(){
 }
 
 /* ===== Sección transversal ===== */
+const lb=(arr,x)=>{let lo=0,hi=arr.length;while(lo<hi){const m=(lo+hi)>>1;if(arr[m]<x)lo=m+1;else hi=m}return lo};
+let cur={i0:0,i1:0}, timer=null;
 function drawSec(){
   sel=Math.max(0,Math.min(dias.length-1,sel));
   const day=dias[sel]; if(!day)return;
-  const [est]=estado(day.max); const [,dm,dd]=day.d.split('-');
-  $('diaTxt').textContent=`${+dd} de ${MES[+dm-1]} ocurrida a las ${day.hm} horas`;
+  const [,dm,dd]=day.d.split('-');
+  $('diaTxt').textContent=`${+dd} de ${MES[+dm-1]} · máximo del día a las ${day.hm} horas`;
   $('prev').disabled=sel<=0; $('next').disabled=sel>=dias.length-1;
+  cur.i0=lb(N.t,toMin(day.d)); cur.i1=lb(N.t,toMin(day.d)+1440);
+  const sl=$('slider'); sl.max=Math.max(0,cur.i1-cur.i0-1);
+  let im=cur.i0; for(let i=cur.i0;i<cur.i1;i++) if(N.max[i]>N.max[im]) im=i;
+  sl.value=im-cur.i0; applySlider();
+  if(charts.cNivel) charts.cNivel.update('none');
+}
+function applySlider(){const i=cur.i0+(+$('slider').value); if(i<N.t.length&&i<cur.i1) showPoint(i)}
+function showPoint(i){renderSec(N.max[i]); $('sliderT').textContent=`${fmtFull(N.t[i])} · ${N.max[i]} cm`}
+function renderSec(lv){
+  const day={max:lv};
+  const [est]=estado(day.max);
   drawGauge(day.max); $('gtxt').textContent=est;
   const X0=52,X1=596,Y0=12,Y1=320,BX=604,BW=60, sx=v=>X0+v/CFG.ancho*(X1-X0), sy=c=>Y1-Math.min(c,CFG.techo)/CFG.techo*(Y1-Y0);
   const ink=css('--ink'),mute=css('--mute'),line=css('--line'); let s='';
@@ -369,7 +392,6 @@ function drawSec(){
   for(const [a,b,c] of [[0,u.amarilla,COL.g],[u.amarilla,u.naranja,COL.y],[u.naranja,u.roja,COL.o],[u.roja,CFG.techo,COL.r]]) s+=`<rect x="${BX}" y="${sy(b)}" width="${BW}" height="${sy(a)-sy(b)}" fill="${c}"/>`;
   s+=`<rect x="${BX}" y="${sy(day.max)-2}" width="${BW}" height="4" fill="${ink}"/><text x="${BX+BW/2}" y="${Y1+16}" text-anchor="middle" font-size="11" fill="${mute}">${est}</text>`;
   $('sec').innerHTML=s;
-  if(charts.cNivel) charts.cNivel.update('none');
 }
 function drawGauge(v){
   const u=CFG.umbrales,[,,l]=estado(v),cx=60,cy=58,r=44,cols=[COL.g,COL.y,COL.o,COL.r],lo=[0,u.amarilla,u.naranja,u.roja],hi=[u.amarilla,u.naranja,u.roja,u.roja+50];
@@ -389,8 +411,10 @@ function drawNivel(){
   const bandas={id:'bandas',beforeDatasetsDraw(c){const {ctx,chartArea:A,scales:{y}}=c;ctx.save();
     [[0,u.amarilla,COL.g],[u.amarilla,u.naranja,COL.y],[u.naranja,u.roja,COL.o],[u.roja,1e4,COL.r]].forEach(([lo,hi,col])=>{const t=Math.max(A.top,y.getPixelForValue(hi)),bt=Math.min(A.bottom,y.getPixelForValue(lo));if(bt>t){ctx.fillStyle=col+'26';ctx.fillRect(A.left,t,A.right-A.left,bt-t)}});ctx.restore()}};
   const selDia={id:'selDia',afterDraw(c){const d=dias[sel];if(!d)return;const x=c.scales.x.getPixelForValue(toMin(d.d)+720),ctx=c.ctx;ctx.save();ctx.strokeStyle=css('--ink');ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(x,c.chartArea.top);ctx.lineTo(x,c.chartArea.bottom);ctx.stroke();ctx.restore()}};
+  $('cNivel').onmouseleave=applySlider;
   mk('cNivel',{type:'line',data:{datasets:[{label:'Nivel (cm)',data:pts,borderColor:css('--water'),borderWidth:1.2,pointRadius:0,pointHitRadius:6}]},plugins:[bandas,selDia],
    options:base({parsing:false,normalized:true,interaction:{mode:'nearest',intersect:false,axis:'x'},
+    onHover:(e,_,c)=>{if(!e.x)return;const v=c.scales.x.getValueForPixel(e.x),i=Math.min(N.t.length-1,Math.max(0,lb(N.t,v)));stop();showPoint(i)},
     onClick:(e,_,c)=>{const v=c.scales.x.getValueForPixel(e.x),i=dias.findIndex(d=>toMin(d.d)<=v&&v<toMin(d.d)+1440);if(i>=0){sel=i;drawSec()}},
     scales:{x:{type:'linear',min:a,max:b,ticks:{callback:fmtTick,color:m,maxTicksLimit:9},grid:{display:false}},y:{beginAtZero:true,title:{display:true,text:'Nivel (cm)',color:m},ticks:{color:m},grid:{color:css('--line')}}},
     plugins:{legend:{display:false},decimation:{enabled:true,algorithm:'min-max'},tooltip:{callbacks:{title:i=>fmtFull(i[0].parsed.x),label:i=>i.parsed.y+' cm'}}}})});
